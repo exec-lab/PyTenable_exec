@@ -1,0 +1,334 @@
+#!/usr/bin/python3
+#Autor: exec Security Operations Infrastructure
+
+from tenable.sc import TenableSC
+from tenable.sc import TenableException
+from utils import pylogger
+from configparser import ConfigParser
+from datetime import date, datetime
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from conf.getConf import Conf
+
+import smtplib
+import os
+
+scriptloc = os.path.join(os.path.dirname(os.path.realpath(__file__)), '')
+scriptname = os.path.splitext(os.path.basename(__file__))[0]
+loginstance = pylogger.Logger(scriptloc, scriptname)
+
+now = datetime.now()
+time = now.strftime('%d-%m-%Y--%H:%M')
+archive = 'archive.txt'
+
+class ScoreCard:
+
+	'''
+	The Vuln class contains the following methods (__ init__, connection_func, connection_adm, disconnect,
+						 vuln_detected, vuln_criticaly, vuln_platforms, license,
+						probes, average, mail)
+	'''
+
+	def __init__(self, cfg):
+
+		'''
+		Constructor method of objects (Sc and Smtp)
+		'''
+
+		try:
+			self.cfg = Conf()
+			host = self.cfg.get('Tenable', 'host')
+			username_func = self.cfg.get('Tenable', 'username_func')
+			pass_func = self.cfg.get('Tenable', 'pass_func')
+			username_adm = self.cfg.get('Tenable', 'username_adm')
+			pass_adm = self.cfg.get('Tenable', 'pass_adm')
+			self.sc = TenableSC(host)
+			server = self.cfg.get('Smtp', 'server')
+			port = self.cfg.get('Smtp', 'port')
+			sender = self.cfg.get('Smtp', 'sender')
+			user_smtp = self.cfg.get('Smtp', 'user')
+			pass_smtp = self.cfg.get('Smtp', 'pass')
+			self.logger = loginstance.setup()
+			self.logger.info('BDE Security Status to date {}'.format(str(time)))
+
+		except Exception as e:
+			self.logger.error('Code error to {}'.format(e))
+
+	def connection_func(self):
+
+		'''
+		Method for connection username_func
+		'''
+
+		login = self.sc.login(username_func, pass_func)
+		return login
+
+	def connection_adm(self):
+
+		'''
+		Method for connection username_adm
+		'''
+
+		login = self.sc.login(username_adm, pass_adm)
+		return login
+
+	def disconnected(self):
+
+		'''
+		Method for disconnection
+		'''
+
+		try:
+			return self.sc.logout()
+			self.logger.info('Disconnected..')
+
+		except TenableException  as e:
+			self.logger.error('Code error: {}'.format(e))
+
+	def vuln_detected(self):
+
+		'''
+		Method that extracts the detected vulnerabilities
+		'''
+
+		try:
+			self.disconnected()
+			self.connection_func()
+			active = []
+			total = 0
+			for vuln in self.sc.analysis.vulns(('pluginType', '=', 'active'),('repositoryIDs', '=', '1'),('severity','=','4,3,2,1'), tool='sumseverity'):
+				sev = vuln['severity']['id']
+				value = vuln['count']
+				if sev == '4':
+					critical = value
+					active.append(int(critical))
+				elif sev == '3':
+					high = value
+					active.append(int(high))
+				elif sev == '2':
+					medium = value
+					active.append(int(medium))
+				elif sev == '1':
+					low = value
+					active.append(int(low))
+
+			total = active[0] + active[1] + active[2] + active[3]
+
+			self.logger.info('Sum of active vulnerabilities detected')
+			self.logger.info('They are {}'.format(int(total)))
+			with open(archive, 'a+') as f:
+				f.write('\nSum of active vulnerabilities detected\n')
+				f.write('*' * 70)
+				f.write('\nThey are {}\n'.format(int(total)))
+
+		except TenableException as e:
+			self.logger.error('Code error: {}'.format(e))
+
+	def vuln_criticaly(self):
+
+		'''
+		Method that extracts vulnerabilities according to critical severity
+		'''
+
+		try:
+			self.disconnected()
+			self.connection_func()
+			for vuln in self.sc.analysis.vulns(('pluginType', '=', 'active'),('repositoryIDs', '=', '1'),('severity','=','4,3,2,1' ), tool='sumseverity'):
+
+				sev = vuln['severity']['id']
+				value = vuln['count']
+				if sev == '4':
+					critical = value
+				elif sev == '3':
+					high = value
+				elif sev == '2':
+					medium = value
+				elif sev == '1':
+					low = value
+
+			self.logger.info('Criticality of vulnerabilities')
+			self.logger.info('Critical: {} High: {} Medium: {} Low: {}'. format(critical, high, medium, low))
+
+			with open(archive, 'a+') as f:
+				f.write('\nCriticality of vulnerabilities\n')
+				f.write('*' * 70)
+				f.write('\nCritical: {} High: {} Medium: {} Low: {}\n'. format(critical, high, medium, low))
+
+		except TenableException as e:
+			self.logger.debug('Code error: {}'.format(e))
+
+	def vuln_platforms(self):
+
+		'''
+		Method that extracts vulnerabilities through the critical OS platform
+		'''
+
+		try:
+			self.disconnected()
+			self.connection_func()
+			lista_vuln = []
+			asset_ids = {'Name Asset1:id,'Name Asset2':id,'Name Asset3':id,'Name Asset4':id}
+			for asset_id in asset_ids:
+				for vuln in self.sc.analysis.vulns(('pluginType', '=', 'active'), ('repositoryIDs','=','1'),
+								('severity', '=', '4'),('asset', '=', asset_ids[asset_id]), tool='sumseverity'):
+
+					value = vuln['count']
+					if value != 0:
+						lista_vuln.append(value)
+
+			windows, redhat, exadata, ibmaix = lista_vuln[0], lista_vuln[5], lista_vuln[10], lista_vuln[15]
+
+			list_ips = []
+			for asset_id in asset_ids:
+				for a in self.sc.asset_lists.details(asset_ids[asset_id], fields=['viewableIPs'])['viewableIPs']:
+					if a['ipCount'] != 0:
+						rep = a['repository']['id']
+						if rep == '1':
+							list_ips.append(a['ipCount'])
+
+			windowshosts, redhatEnterprise, bdeexadata, ibmAix = list_ips[0], list_ips[1], list_ips[2], list_ips[3]
+
+			tw = int(windows) / int(windowshosts)
+			tr = int(redhat) / int(redhatEnterprise)
+			te = int(exadata) / int(bdeexadata)
+			ta = int(ibmaix) / int(ibmAix)
+
+			self.logger.info('Vulnerabilities by platform')
+			self.logger.info('Windows: {} RedHat : {} Exadata: {} IBMAIX: {}'.format(tw, tr, te, ta))
+
+			with open(archive, 'a+') as f:
+				f.write('\nVulnerabilities by platform with critical severity\n')
+				f.write('*' * 70)
+				f.write('\nWindows : {} Rhel : {} Aix : {} Exadata : {}\n'.format(tw, tr, te, ta ))
+
+		except TenableException as e:
+			self.logger.debug('Code error: {}'.format(e))
+
+	def licence(self):
+
+		'''
+		Method that extracts the number of licenses and their consumption with percentage
+		'''
+
+		try:
+			self.disconnected()
+			self.connection_adm()
+			sc_licence = self.sc.status.status()
+			active_ips = sc_licence['activeIPs']
+			licensed_ips = sc_licence['licensedIPs']
+
+			utilization = int(100 * int(active_ips) / int(licensed_ips))
+			self.logger.info('License status')
+			self.logger.info('The Ip consumed are the following : {} '.format(active_ips))
+			self.logger.info('The current use of the license is : {}% '.format(utilization))
+
+			with open(archive, 'a+') as f:
+				f.write('License status \n')
+				f.write('*' * 70)
+				f.write('\nThe Ip consumed are the following : {}\n'.format(active_ips))
+				f.write('\nThe current use of the license is : {}%\n '.format(utilization))
+
+		except TenableException as e:
+			self.logger.debug('Code error: {}'.format(e))
+
+	def probes(self):
+
+		'''
+		Method that extracts the number of probes, it is possible to expand
+		to get more detail of each probe
+		'''
+
+		self.disconnected()
+		self.connection_adm()
+		number_probes = self.sc.scanners.list()
+		self.logger.info('Number of probes is {}'.format(len(number_probes)))
+
+		with open(archive, 'a+') as f:
+			f.write('\n')
+			f.write('*' * 70)
+			f.write('\nNumber of probes is {}\n'.format(len(number_probes)))
+
+	def average(self):
+
+		'''
+		Method that calculates the average number of days in which vulnerabilities
+		are divided by the number of hosts for each assigned asset
+		'''
+
+		try:
+			self.disconnected()
+			self.connection_func()
+			timerange = 365
+			today = date.today()
+			timeslot = 7
+			timeslots = range(0, timerange, timeslot)
+			results = []
+			for days in timeslots:
+				daysMitigated = str(days)+':'+str(days+timeslot)
+				query = (('pluginType', '=', 'active'),
+					('repositoryIDs', '=', '1'),
+					('daysMitigated', '=', daysMitigated))
+
+				vulns = self.sc.analysis.vulns(*query, tool='sumseverity', sourceType='patched')
+				response = []
+				for vuln in vulns:
+					response.append(vuln)
+
+				results.append([response[0]['count'],
+						response[1]['count'],
+						response[2]['count'],
+						response[3]['count']])
+
+			x = 0
+			y = 0
+			timeslot = 7
+			for time in range(0, len(timeslots)):
+				midpoint = timeslots[time] + float(timeslot)/2
+				x = x + midpoint*(float(results[time][0])+int(results[time][1]))
+				y = y + (float(results[time][0])+int(results[time][1]))
+			if y != 0:
+				self.logger.info('Average days it takes to mitigate XXX repository vulnerabilities is {}'.format(x/y))
+
+				with open(archive, 'a+') as f:
+					f.write('\n')
+					f.write('*' * 70)
+					f.write('\nAverage days it takes to mitigate XXX repository vulnerabilities is {}\n'.format(x/y))
+
+			else:
+				self.logger.info('Repositori: XXX these are the Vulnerabilities that have not been mitigated')
+
+
+		except TenableException as e:
+			self.logger.debug('Code error: {}'.format(e))
+
+		self.disconnected()
+
+	def mail(self):
+
+		'''
+		Method to send email with attachment, to several email addresses
+		'''
+
+		targets = ['mail1', 'mail2']
+
+		msg = MIMEMultipart()
+		msg['Subject'] = 'Subject'
+		msg['From'] = sender
+		msg['To'] = ', '.join(targets)
+
+		msg.attach(MIMEText('\nAttached file with the security status of the XXX {}'.format(str(time)), 'plain'))
+
+		filepath = 'archive.txt'
+		with open(filepath, 'r') as f:
+			txt = MIMEText(f.read())
+
+		txt.add_header('Content-Disposition','attachment', filename=os.path.basename(filepath))
+		msg.attach(txt)
+
+		server = smtplib.SMTP(server, port)
+		server.login(user_smtp, pass_smtp)
+		server.sendmail(sender, targets, msg.as_string())
+		server.quit()
+
+		if os.path.exists(archive):
+			os.remove(archive)
