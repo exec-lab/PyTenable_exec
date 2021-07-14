@@ -49,7 +49,7 @@ class ScoreCard:
 			user_smtp = self.cfg.get('Smtp', 'user')
 			pass_smtp = self.cfg.get('Smtp', 'pass')
 			self.logger = loginstance.setup()
-			self.logger.info('BDE Security Status to date {}'.format(str(time)))
+			self.logger.info(XXX Security Status to date {}'.format(str(time)))
 
 		except Exception as e:
 			self.logger.error('Code error to {}'.format(e))
